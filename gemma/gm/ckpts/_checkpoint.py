@@ -643,21 +643,36 @@ def _get_metadata_and_path(
   """Returns the metadata of the checkpoint."""
   path = epath.Path(path)
 
-  metadata = ckpt.metadata(path)
+  def _normalize_metadata(metadata_obj):
+    """Normalizes Orbax metadata across versions.
+
+    Newer Orbax versions return an object with `item_metadata.tree`, while
+    older versions may directly return the metadata tree as a `dict`.
+    """
+    if isinstance(metadata_obj, dict):
+      return metadata_obj
+    item_metadata = getattr(metadata_obj, 'item_metadata', None)
+    if item_metadata is None:
+      return None
+    return item_metadata.tree
+
+  metadata_obj = ckpt.metadata(path)
+  metadata = _normalize_metadata(metadata_obj)
 
   # Kauldron checkpoints structure is different, so the params are contained
   # in a sub-directory
   if (
-      metadata.item_metadata is None
+      metadata is None
       and path.joinpath('_CHECKPOINT_METADATA').exists()
+      and path.joinpath('default').exists()
   ):
     path = path / 'default'
-    metadata = ckpt.metadata(path)
+    metadata_obj = ckpt.metadata(path)
+    metadata = _normalize_metadata(metadata_obj)
 
-  if metadata.item_metadata is None:  # No item metadata
+  if metadata is None:
     raise ValueError(f'No item metadata found in {path}')
 
-  metadata = metadata.item_metadata.tree  # Normalize metadata
   return metadata, path
 
 
