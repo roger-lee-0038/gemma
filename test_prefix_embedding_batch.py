@@ -1,0 +1,105 @@
+# Copyright 2026 DeepMind Technologies Limited.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Example integration test: fixed prefix with batched suffix embeddings."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from gemma import gm
+
+
+os.environ["GEMMA_CACHE_DIR"] = os.path.expanduser("~/.gemma")
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
+
+
+def _get_ckpt_path() -> str:
+  return os.environ.get(
+      "GEMMA_E4B_CKPT_PATH",
+      "/home/roger/Downloads/gemma-4-e4b-it-flax",
+  )
+
+
+def _get_tokenizer_path() -> str:
+  return os.environ.get(
+      "GEMMA_E4B_TOKENIZER_PATH",
+      "/home/roger/Downloads/gemma-4-tokenizer/tokenizer_gemma4.model",
+  )
+
+
+def _skip_if_missing_resources() -> None:
+  ckpt_path = Path(_get_ckpt_path())
+  tokenizer_path = Path(_get_tokenizer_path())
+
+  if not ckpt_path.exists():
+    pytest.skip(f"Missing checkpoint path: {ckpt_path}")
+  if not tokenizer_path.exists():
+    pytest.skip(f"Missing tokenizer path: {tokenizer_path}")
+  if not Path(ckpt_path, "_METADATA").exists():
+    pytest.skip(
+        f"{ckpt_path} is not a Gemma JAX/Orbax checkpoint (missing _METADATA)"
+    )
+
+
+def _load_model_and_params():
+  _skip_if_missing_resources()
+
+  model = gm.nn.Gemma4_E4B(text_only=True)
+  params = gm.ckpts.load_params(
+      _get_ckpt_path(),
+      text_only=True,
+      restore_concurrent_gb=12,
+  )
+  tokenizer = gm.text.Gemma4Tokenizer(path=_get_tokenizer_path())
+  return model, params, tokenizer
+
+
+def test_fixed_prefix_embedder_supports_suffix_list_inputs():
+  model, params, tokenizer = _load_model_and_params()
+
+  embedder = gm.text.FixedPrefixEosEmbedder(
+      model=model,
+      params=params,
+      tokenizer=tokenizer,
+      prefix_text="You are a concise assistant.",
+      cache_length=256,
+  )
+
+  suffixes = [
+      "Everything will be all right.",
+      "Tomorrow will be fine.",
+      "Quantum mechanics describes particles and waves.",
+  ]
+
+  embeddings = embedder.encode(suffixes)
+  similarity = embeddings @ embeddings.T
+  print("Similarity matrix:\n", similarity, flush=True)
+
+  assert embeddings.ndim == 2
+  assert embeddings.shape[0] == len(suffixes)
+
+  norms = np.linalg.norm(np.asarray(embeddings), axis=-1)
+  np.testing.assert_allclose(norms, np.ones((len(suffixes),)), rtol=1e-4, atol=1e-4)
+
+  assert similarity[0, 1] > similarity[0, 2]
+
+
+if __name__ == "__main__":
+  test_fixed_prefix_embedder_supports_suffix_list_inputs()

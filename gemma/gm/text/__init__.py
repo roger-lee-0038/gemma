@@ -43,4 +43,6 @@ with _epy.lazy_api_imports(globals()):
   from gemma.gm.text._sampling import TopPSampling
 
   # Other utils
+  from gemma.gm.text._embeddings import FixedPrefixEosEmbedder
+  from gemma.gm.text._embeddings import encode_eos_embeddings
   # from gemma.gm.text import _template as template
